@@ -1,10 +1,12 @@
 
 I coded up [NEAT in pure python](neat.py) as a learning exercise, visualizations by gpt5:
 
-![](lunar_lander_scratch.mp4)
+https://github.com/user-attachments/assets/17d6b294-aafa-430e-bebe-dd56a7482c6c
+
 Run `uv run train_lunar_lander.py --stagnation_generations 50` to reproduce.
 
-![](lunar_lander_dense.mp4)
+https://github.com/user-attachments/assets/e057d507-627b-4668-a370-238c7ea9f022
+
 Run `uv run train_lunar_lander.py --dense_initial_connectivity` to reproduce.
 
 ```
