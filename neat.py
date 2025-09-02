@@ -7,6 +7,7 @@ import random
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum, auto
+from itertools import accumulate
 from typing import Callable
 
 
@@ -81,6 +82,11 @@ class NEATConfig:
     champion_preservation_threshold: int  # species size above which to preserve champion
     inherited_disable_rate: float  # probability of disabling a gene disabled in either parent
     toggle_rate: float  # probability of toggling the enabled state of a connection
+
+    # optional global stagnation cull (paper footnote). If not None and all species are stagnant for this many generations (after a starting gen), keep only the top-K species
+    global_stagnation_generations: int | None = None
+    global_cull_keep_top_k: int = 2
+    global_cull_start_gen: int = 20
 
 
 class NEAT:
@@ -225,10 +231,14 @@ class NEAT:
             non_stagnant = [s for s in self.species if s.generations_without_improvement < self.config.stagnation_generations]
             self.species = non_stagnant if non_stagnant else [max(self.species, key=lambda s: s.best_fitness_ever)]
 
-            # if entire population stagnant for 20+ generations, keep only top 2
-            if self.generation > 20 and all(s.generations_without_improvement > 20 for s in self.species):
+            if (
+                self.config.global_stagnation_generations is not None
+                and self.generation > self.config.global_cull_start_gen
+                and self.species
+                and all(s.generations_without_improvement > self.config.global_stagnation_generations for s in self.species)
+            ):
                 self.species.sort(key=lambda s: s.best_fitness_ever, reverse=True)
-                self.species = self.species[:2]
+                self.species = self.species[: max(1, self.config.global_cull_keep_top_k)]
 
             # set new representative for each species
             for s in self.species:
@@ -250,9 +260,11 @@ class NEAT:
             if count == 0:
                 continue
             s.sort(key=lambda g: g.fitness, reverse=True)
-            if len(s) > self.config.champion_preservation_threshold:
+
+            if len(s) > self.config.champion_preservation_threshold and count > 0:
                 new_population.append(copy.deepcopy(s[0]))
                 count -= 1
+
             survivors = s[: max(1, int(len(s) * self.config.survival_threshold))]  # Keep at least 1
 
             min_fitness = min(g.fitness for g in survivors)  # weights must be positive
@@ -285,22 +297,38 @@ class NEAT:
         return new_population
 
     def _get_offspring_counts(self, species: list[list[Genome]]) -> list[int]:
-        species_avg = [sum(g.adjusted_fitness for g in s) for s in species]
-        total_avg = sum(species_avg)
+        # mean raw fitness with sharing by species size
+        scores = [sum(g.adjusted_fitness for g in s) for s in species]
+        n_species = len(scores)
+        if n_species == 0:
+            return []
 
-        if total_avg == 0:
-            # all zero fitness - distribute equally
-            base, remainder = divmod(self.config.population_size, len(species))
-            offspring_counts = [base] * len(species)
-            offspring_counts[0] += remainder
-        else:
-            offspring_counts = [int((avg / total_avg) * self.config.population_size) for avg in species_avg]
-            remainder = self.config.population_size - sum(offspring_counts)
-            # give remainder to best species
-            best_idx = species_avg.index(max(species_avg))
-            offspring_counts[best_idx] += remainder
+        # make scores non-negative via global min-shift
+        min_score = min(scores)
+        weights = [(s - min_score) if (s - min_score) > 0 else 0.0 for s in scores]
+        total = sum(weights)
 
-        return offspring_counts
+        if total <= 1e-12:
+            # no signal: distribute equally
+            base, remainder = divmod(self.config.population_size, n_species)
+            counts = [base] * n_species
+            for i in range(remainder):
+                counts[i] += 1
+            return counts
+
+        # Stochastic Universal Sampling (SUS) for proportional allocation
+        # could also use multinomial sampling, but SUS has no bias, lower variance => less risk of accidental extinction
+        step = total / self.config.population_size
+        start = random.uniform(0.0, step)
+        cumulative = list(accumulate(weights))
+        counts = [0] * n_species
+        idx = 0
+        for k in range(self.config.population_size):
+            pointer = start + k * step
+            while idx < n_species - 1 and cumulative[idx] < pointer:
+                idx += 1
+            counts[idx] += 1
+        return counts
 
     def _crossover(self, parent1: Genome, parent2: Genome) -> Genome:
         fittest_parent = parent1 if parent1.fitness >= parent2.fitness else parent2

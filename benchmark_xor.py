@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 """Benchmark XOR to compare with original NEAT paper."""
 
-import matplotlib.animation as animation
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
-import networkx as nx
-
 from neat import NEAT, NEATConfig, NEATNetwork
 
-# XOR test data
 XOR_INPUTS = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
 XOR_OUTPUTS = [[0.0], [1.0], [1.0], [0.0]]
 
@@ -24,7 +18,7 @@ def evaluate_xor(genome):
     return fitness * fitness  # Paper squares fitness to amplify good solutions
 
 
-def run_xor_trial(max_gens=100, return_best=False, collect_history=False):  # Paper's worst case was 90 gens
+def run_xor_trial(max_gens=100, return_best=False):  # Paper's worst case was 90 gens
     """Run a single XOR trial, return generations to solve or None if failed."""
     config = NEATConfig(
         n_inputs=3,  # 2 + bias
@@ -53,233 +47,31 @@ def run_xor_trial(max_gens=100, return_best=False, collect_history=False):  # Pa
         interspecies_mating_rate=0.001,  # Paper: 0.001
         champion_preservation_threshold=5,  # Paper: species > 5
         inherited_disable_rate=0.75,  # Paper: 75%
-        toggle_rate=0.0,  # Not mentioned in paper
+        toggle_rate=0.01,  # Not mentioned in paper
+        # paper footnote
+        global_cull_start_gen=0,
+        global_stagnation_generations=20,
+        global_cull_keep_top_k=2,
     )
 
     neat = NEAT(config)
-
-    history = [] if collect_history else None
 
     for generation in range(max_gens):
         genomes = neat.ask()
         fitnesses = [evaluate_xor(g) for g in genomes]
         neat.tell(fitnesses)
 
-        # Collect history if requested
-        if collect_history:
-            import copy
-
-            best_genome = copy.deepcopy(neat.best)
-            history.append((generation, best_genome, max(fitnesses)))
-
         # Check if solved: unsquared fitness > 3.9 means error < 0.1
         if max(fitnesses) > 15.21:  # 3.9^2 = 15.21
             best = neat.best
             n_hidden = len([n for n in best.nodes if str(n.node_type) == "hidden"])
             n_conn = len([c for c in best.connections if c.enabled])
-            if collect_history:
-                return generation + 1, n_hidden, n_conn, history
             if return_best:
-                return generation + 1, n_hidden, n_conn, best
+                return generation + 1, n_hidden, n_conn
             return generation + 1, n_hidden, n_conn
-
-    if collect_history:
-        return None, None, None, history if history else None
     if return_best:
-        return None, None, None, None
+        return None, None, None
     return None, None, None  # Failed
-
-
-def visualize_network(genome, title="NEAT Network"):
-    """Visualize a NEAT genome as a neural network graph."""
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    # Create a directed graph
-    G = nx.DiGraph()
-
-    # Group nodes by type
-    input_nodes = []
-    output_nodes = []
-    hidden_nodes = []
-
-    for node in genome.nodes:
-        G.add_node(node.id)
-        if str(node.node_type) == "input":
-            input_nodes.append(node.id)
-        elif str(node.node_type) == "output":
-            output_nodes.append(node.id)
-        else:
-            hidden_nodes.append(node.id)
-
-    # Add edges from enabled connections
-    edge_colors = []
-    edge_widths = []
-    for conn in genome.connections:
-        if conn.enabled:
-            G.add_edge(conn.in_node, conn.out_node, weight=conn.weight)
-            # Color edges based on weight (blue for positive, red for negative)
-            if conn.weight > 0:
-                edge_colors.append("blue")
-            else:
-                edge_colors.append("red")
-            # Width based on absolute weight
-            edge_widths.append(min(abs(conn.weight) * 2, 5))
-
-    # Position nodes in layers
-    pos = {}
-
-    # Input layer (including bias as the third input)
-    for i, node_id in enumerate(input_nodes):
-        pos[node_id] = (0, (len(input_nodes) - 1 - i) * 2)
-
-    # Output layer
-    for i, node_id in enumerate(output_nodes):
-        pos[node_id] = (4, (len(output_nodes) - 1 - i) * 2)
-
-    # Hidden layer(s) - arrange in middle columns
-    if hidden_nodes:
-        # Simple layout: put all hidden nodes in middle column
-        for i, node_id in enumerate(hidden_nodes):
-            pos[node_id] = (2, (len(hidden_nodes) - 1 - i) * 2)
-
-    # Draw the graph
-    nx.draw_networkx_nodes(G, pos, nodelist=input_nodes, node_color="lightgreen", node_size=700, label="Input", ax=ax)
-    nx.draw_networkx_nodes(G, pos, nodelist=output_nodes, node_color="lightcoral", node_size=700, label="Output", ax=ax)
-    if hidden_nodes:
-        nx.draw_networkx_nodes(G, pos, nodelist=hidden_nodes, node_color="lightblue", node_size=700, label="Hidden", ax=ax)
-
-    # Draw edges with colors and widths
-    nx.draw_networkx_edges(G, pos, edge_color=edge_colors, width=edge_widths, alpha=0.7, arrows=True, arrowsize=20, ax=ax)
-
-    # Draw labels
-    labels = {}
-    for i, node_id in enumerate(input_nodes):
-        if i < 2:
-            labels[node_id] = f"X{i + 1}"
-        else:
-            labels[node_id] = "Bias"
-    for node_id in output_nodes:
-        labels[node_id] = "Out"
-    for i, node_id in enumerate(hidden_nodes):
-        labels[node_id] = f"H{i + 1}"
-
-    nx.draw_networkx_labels(G, pos, labels, font_size=10, ax=ax)
-
-    # Add title and legend
-    ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.legend(loc="upper right")
-    ax.axis("off")
-
-    # Add weight color legend
-    blue_patch = patches.Patch(color="blue", label="Positive weight")
-    red_patch = patches.Patch(color="red", label="Negative weight")
-    ax.legend(handles=[blue_patch, red_patch], loc="lower right")
-
-    plt.tight_layout()
-    return fig
-
-
-def animate_evolution(history, filename="xor_evolution.gif"):
-    """Create an animation showing the evolution of the best network over generations."""
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    def update(frame):
-        ax.clear()
-        generation, genome, fitness = history[frame]
-
-        # Create a directed graph
-        G = nx.DiGraph()
-
-        # Group nodes by type
-        input_nodes = []
-        output_nodes = []
-        hidden_nodes = []
-
-        for node in genome.nodes:
-            G.add_node(node.id)
-            if str(node.node_type) == "input":
-                input_nodes.append(node.id)
-            elif str(node.node_type) == "output":
-                output_nodes.append(node.id)
-            else:
-                hidden_nodes.append(node.id)
-
-        # Add edges from enabled connections
-        edge_colors = []
-        edge_widths = []
-        for conn in genome.connections:
-            if conn.enabled:
-                G.add_edge(conn.in_node, conn.out_node, weight=conn.weight)
-                if conn.weight > 0:
-                    edge_colors.append("blue")
-                else:
-                    edge_colors.append("red")
-                edge_widths.append(min(abs(conn.weight) * 2, 5))
-
-        # Position nodes in layers
-        pos = {}
-
-        # Input layer
-        for i, node_id in enumerate(input_nodes):
-            pos[node_id] = (0, (len(input_nodes) - 1 - i) * 2)
-
-        # Output layer
-        for i, node_id in enumerate(output_nodes):
-            pos[node_id] = (4, (len(output_nodes) - 1 - i) * 2)
-
-        # Hidden layers
-        if hidden_nodes:
-            for i, node_id in enumerate(hidden_nodes):
-                pos[node_id] = (2, (len(hidden_nodes) - 1 - i) * 2)
-
-        # Draw the graph
-        nx.draw_networkx_nodes(G, pos, nodelist=input_nodes, node_color="lightgreen", node_size=700, ax=ax)
-        nx.draw_networkx_nodes(G, pos, nodelist=output_nodes, node_color="lightcoral", node_size=700, ax=ax)
-        if hidden_nodes:
-            nx.draw_networkx_nodes(G, pos, nodelist=hidden_nodes, node_color="lightblue", node_size=700, ax=ax)
-
-        # Draw edges
-        if edge_colors:
-            nx.draw_networkx_edges(G, pos, edge_color=edge_colors, width=edge_widths, alpha=0.7, arrows=True, arrowsize=20, ax=ax)
-
-        # Draw labels
-        labels = {}
-        for i, node_id in enumerate(input_nodes):
-            if i < 2:
-                labels[node_id] = f"X{i + 1}"
-            else:
-                labels[node_id] = "Bias"
-        for node_id in output_nodes:
-            labels[node_id] = "Out"
-        for i, node_id in enumerate(hidden_nodes):
-            labels[node_id] = f"H{i + 1}"
-
-        nx.draw_networkx_labels(G, pos, labels, font_size=10, ax=ax)
-
-        # Add title with generation and fitness info
-        n_hidden = len(hidden_nodes)
-        n_conn = len([c for c in genome.connections if c.enabled])
-        ax.set_title(
-            f"Generation {generation + 1} | Fitness: {fitness:.2f} | Hidden: {n_hidden} | Connections: {n_conn}",
-            fontsize=14,
-            fontweight="bold",
-        )
-        ax.axis("off")
-
-        # Add legend
-        blue_patch = patches.Patch(color="blue", label="Positive weight")
-        red_patch = patches.Patch(color="red", label="Negative weight")
-        ax.legend(handles=[blue_patch, red_patch], loc="lower right")
-
-    # Create animation
-    anim = animation.FuncAnimation(fig, update, frames=len(history), interval=100, repeat=True)
-
-    # Save animation
-    writer = animation.PillowWriter(fps=10)
-    anim.save(filename, writer=writer)
-    plt.close(fig)
-
-    print(f"Animation saved as {filename}")
 
 
 def main():
@@ -292,7 +84,6 @@ def main():
     total_hidden = []
     total_conn = []
     networks_evaluated = []
-    best_genome = None
 
     for trial in range(n_trials):
         gens, hidden, conn = run_xor_trial()
@@ -341,10 +132,7 @@ def main():
 
         # Create animation of evolution
         print("\nGenerating animation of network evolution...")
-        gens, hidden, conn, history = run_xor_trial(collect_history=True)
-        if history:
-            animate_evolution(history, "xor_evolution.gif")
-            print(f"Evolution completed in {gens} generations with {hidden} hidden nodes and {conn} connections")
+        run_xor_trial()
 
 
 main()
